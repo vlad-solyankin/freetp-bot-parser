@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  freetp-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: freetp-bot
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    env_file:
+      - .env
+    volumes:
+      # Монтируем директорию с данными для сохранения состояния
+      - ./data:/app/data
+    # Логирование
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Ограничения ресурсов (опционально)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M

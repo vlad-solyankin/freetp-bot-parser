@@ -11,6 +11,35 @@ Telegram бот для парсинга и отслеживания игр с с
 
 ## Установка
 
+### Вариант 1: Docker (рекомендуется для продакшна)
+
+1. Клонируйте репозиторий:
+```bash
+git clone https://github.com/vlad-solyankin/freetp-bot-parser.git
+cd freetp-bot-parser
+```
+
+2. Создайте файл `.env` на основе `env.example`:
+```bash
+cp env.example .env
+```
+
+3. Заполните `.env` файл своими данными
+
+4. Запустите через Docker Compose:
+```bash
+docker-compose up -d
+```
+
+5. Просмотр логов:
+```bash
+docker-compose logs -f
+```
+
+Подробные инструкции по Docker см. в [DEPLOY.md](./DEPLOY.md)
+
+### Вариант 2: Локальная установка
+
 1. Клонируйте репозиторий или скачайте файлы
 2. Установите зависимости:
 ```bash
@@ -28,6 +57,7 @@ TELEGRAM_BOT_TOKEN=your_bot_token_here
 FREETP_URL=https://freetp.org
 CHECK_INTERVAL=0 * * * *
 NOTIFICATION_CHAT_ID=
+NOTIFICATION_TOPIC_ID=
 ```
 
 ### Получение Telegram Bot Token
@@ -44,17 +74,24 @@ NOTIFICATION_CHAT_ID=
 npm run dev
 ```
 
-### Продакшн
+### Продакшн (локально)
 ```bash
 npm run build
 npm start
 ```
 
+### Продакшн (Docker)
+```bash
+docker-compose up -d
+```
+
 ## Команды бота
 
 - `/start` - Приветственное сообщение
-- `/games` - Показать последние 10 игр
+- `/games` - Показать последние 10 игр с главной страницы
+- `/games <номер>` - Показать игры со страницы (например: `/games 2`)
 - `/newgames` - Проверить новые игры вручную
+- `/chatid` - Показать ID чата для настройки уведомлений
 - `/help` - Справка по командам
 
 ## Структура проекта
@@ -71,6 +108,9 @@ freetp-coop-bot/
 ├── dist/               # Скомпилированный код
 ├── .env                # Конфигурация (не в git)
 ├── env.example         # Пример конфигурации
+├── Dockerfile          # Docker образ
+├── docker-compose.yml  # Docker Compose конфигурация
+├── .dockerignore       # Исключения для Docker
 ├── package.json
 ├── tsconfig.json
 ├── DEPLOY.md           # Гайд по деплою на VPS
