@@ -3,7 +3,9 @@ import * as cron from 'node-cron';
 import * as dotenv from 'dotenv';
 import { FreetpParser } from './parser';
 import { GameStorage } from './storage';
-import { Game } from './types';
+import { EpicGamesParser } from './epic-parser';
+import { EpicGamesStorage } from './epic-storage';
+import { Game, EpicGame } from './types';
 
 // Загружаем переменные окружения
 dotenv.config();
@@ -11,6 +13,7 @@ dotenv.config();
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const FREETP_URL = process.env.FREETP_URL || 'https://freetp.org';
 const CHECK_INTERVAL = process.env.CHECK_INTERVAL || '*/30 * * * * *'; // Каждые 30 секунд (формат с секундами)
+const EPIC_CHECK_INTERVAL = process.env.EPIC_CHECK_INTERVAL || '0 0 */6 * * *'; // Каждые 6 часов (формат с секундами)
 const NOTIFICATION_CHAT_ID = process.env.NOTIFICATION_CHAT_ID;
 const NOTIFICATION_TOPIC_ID = process.env.NOTIFICATION_TOPIC_ID;
 
@@ -23,6 +26,8 @@ if (!BOT_TOKEN) {
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const parser = new FreetpParser(FREETP_URL);
 const storage = new GameStorage();
+const epicParser = new EpicGamesParser();
+const epicStorage = new EpicGamesStorage();
 
 // Хранилище состояния пагинации (chatId -> {games, currentPage})
 const paginationState = new Map<number, { games: Game[]; currentPage: number }>();
@@ -67,6 +72,45 @@ function formatGame(game: Game): string {
 ${safeDescription ? `📝 ${safeDescription}` : ''}
 
 🔗 <a href="${game.url}">Подробнее</a>`;
+}
+
+/**
+ * Форматирование бесплатной игры Epic Games для отправки в Telegram
+ */
+function formatEpicGame(game: EpicGame): string {
+  const safeTitle = escapeHtml(game.title);
+  const safeDescription = game.description 
+    ? escapeHtml(game.description.substring(0, 300)) + (game.description.length > 300 ? '...' : '')
+    : '';
+  
+  const startDate = new Date(game.startDate).toLocaleString('ru-RU');
+  const endDate = new Date(game.endDate).toLocaleString('ru-RU');
+  
+  let message = `🎁 <b>${safeTitle}</b>\n\n`;
+  
+  if (safeDescription) {
+    message += `📝 ${safeDescription}\n\n`;
+  }
+  
+  if (game.publisher) {
+    message += `🏢 Издатель: ${escapeHtml(game.publisher)}\n`;
+  }
+  
+  if (game.developer) {
+    message += `👨‍💻 Разработчик: ${escapeHtml(game.developer)}\n`;
+  }
+  
+  if (game.originalPrice) {
+    message += `💰 Обычная цена: <s>${escapeHtml(game.originalPrice)}</s> → <b>БЕСПЛАТНО</b>\n\n`;
+  } else {
+    message += `💰 <b>БЕСПЛАТНО</b>\n\n`;
+  }
+  
+  message += `📅 Доступна с: ${startDate}\n`;
+  message += `⏰ Доступна до: ${endDate}\n\n`;
+  message += `🔗 <a href="${game.url}">Получить в Epic Games Store</a>`;
+  
+  return message;
 }
 
 /**
@@ -353,21 +397,71 @@ async function checkNewGames(): Promise<void> {
   }
 }
 
+/**
+ * Проверка бесплатных игр Epic Games и отправка уведомлений
+ */
+async function checkEpicFreeGames(): Promise<void> {
+  const targetChatId = NOTIFICATION_CHAT_ID ? parseInt(NOTIFICATION_CHAT_ID) : null;
+  const checkTime = new Date().toLocaleString('ru-RU');
+  
+  try {
+    console.log(`[${checkTime}] Проверка бесплатных игр Epic Games...`);
+    
+    // Очищаем устаревшие игры
+    epicStorage.cleanExpiredGames();
+    
+    const freeGames = await epicParser.getFreeGames();
+    const newGames = epicStorage.findNewGames(freeGames);
+
+    if (newGames.length > 0) {
+      console.log(`[${checkTime}] Найдено новых бесплатных игр Epic Games: ${newGames.length}`);
+      
+      // Сохраняем новые игры
+      epicStorage.addGames(newGames);
+
+      // Отправляем уведомления о каждой новой бесплатной игре
+      for (const game of newGames) {
+        const message = `🎁 <b>Бесплатная раздача в Epic Games Store!</b>\n\n${formatEpicGame(game)}`;
+        
+        if (targetChatId) {
+          const success = await sendMessageWithRetry(targetChatId, message, {
+            parse_mode: 'HTML',
+            disable_web_page_preview: false
+          });
+          
+          if (!success) {
+            console.warn(`Не удалось отправить уведомление о бесплатной игре ${game.id}, но бот продолжает работу`);
+          }
+        } else {
+          console.log('NOTIFICATION_CHAT_ID не установлен, уведомления не отправлены');
+        }
+      }
+    } else {
+      console.log(`[${checkTime}] Проверка Epic Games завершена. Новых бесплатных игр не найдено.`);
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Неизвестная ошибка';
+    console.error(`[${checkTime}] Ошибка при проверке бесплатных игр Epic Games:`, errorMessage);
+  }
+}
+
 // Обработчики команд бота
 
 // Команда /start
 bot.onText(/\/start/, async (msg: TelegramBot.Message) => {
   const chatId = msg.chat.id;
-  const welcomeMessage = `👋 Привет! Я бот для отслеживания игр с freetp.org
+  const welcomeMessage = `👋 Привет! Я бот для отслеживания игр с freetp.org и бесплатных раздач Epic Games Store
 
 📋 <b>Доступные команды:</b>
 /games - Показать последние 10 игр с главной страницы
 /games <номер> - Показать игры со страницы (например: /games 2)
-/newgames - Проверить новые игры
+/newgames - Проверить новые игры на freetp.org
+/epicgames - Проверить бесплатные игры Epic Games
+/epiclist - Показать текущие бесплатные игры Epic Games
 /chatid - Показать ID чата для уведомлений
 /help - Показать справку
 
-Бот автоматически проверяет новые игры каждый час.`;
+Бот автоматически проверяет новые игры и бесплатные раздачи.`;
 
   await sendMessageWithRetry(chatId, welcomeMessage, { parse_mode: 'HTML' });
 });
@@ -377,17 +471,21 @@ bot.onText(/\/help/, async (msg: TelegramBot.Message) => {
   const chatId = msg.chat.id;
   const helpMessage = `📚 <b>Справка по командам:</b>
 
+<b>🎮 Freetp.org:</b>
 /games - Получить список из 10 последних игр с главной страницы freetp.org
-/games <номер> - Получить список игр с указанной страницы (например: /games 2 для страницы freetp.org/page/2)
+/games <номер> - Получить список игр с указанной страницы (например: /games 2)
+/newgames - Вручную проверить наличие новых игр на freetp.org
 
-/newgames - Вручную проверить наличие новых игр (бот также делает это автоматически каждый час)
+<b>🎁 Epic Games Store:</b>
+/epicgames - Проверить бесплатные игры Epic Games Store
+/epiclist - Показать текущие активные бесплатные игры
 
+<b>⚙️ Настройки:</b>
 /chatid - Показать ID текущего чата (для настройки уведомлений)
-
 /help - Показать эту справку
 
 <b>Автоматические уведомления:</b>
-Бот автоматически проверяет сайт каждый час. Если вы хотите получать уведомления о новых играх, установите переменную NOTIFICATION_CHAT_ID в .env файле.`;
+Бот автоматически проверяет freetp.org и Epic Games Store. Если вы хотите получать уведомления, установите переменную NOTIFICATION_CHAT_ID в .env файле.`;
 
   await sendMessageWithRetry(chatId, helpMessage, { parse_mode: 'HTML' });
 });
@@ -553,6 +651,75 @@ bot.onText(/\/newgames/, async (msg: TelegramBot.Message) => {
   }
 });
 
+// Команда /epicgames - проверить бесплатные игры Epic Games
+bot.onText(/\/epicgames/, async (msg: TelegramBot.Message) => {
+  const chatId = msg.chat.id;
+  
+  try {
+    await sendMessageWithRetry(chatId, '🎁 Проверяю бесплатные игры Epic Games Store...');
+    await checkEpicFreeGames();
+    
+    // Получаем активные бесплатные игры
+    const activeGames = epicStorage.getActiveGames();
+    if (activeGames.length > 0) {
+      await sendMessageWithRetry(chatId, `✅ Проверка завершена. Найдено активных бесплатных игр: ${activeGames.length}`);
+    } else {
+      await sendMessageWithRetry(chatId, '✅ Проверка завершена. Активных бесплатных игр не найдено.');
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Неизвестная ошибка';
+    console.error('Ошибка в команде /epicgames:', error);
+    
+    try {
+      await sendMessageWithRetry(chatId, `❌ Ошибка при проверке бесплатных игр Epic Games: ${errorMessage}`);
+    } catch (sendError) {
+      console.error('Не удалось отправить сообщение об ошибке:', sendError);
+    }
+  }
+});
+
+// Команда /epiclist - показать текущие бесплатные игры Epic Games
+bot.onText(/\/epiclist/, async (msg: TelegramBot.Message) => {
+  const chatId = msg.chat.id;
+  
+  try {
+    const activeGames = epicStorage.getActiveGames();
+    
+    if (activeGames.length === 0) {
+      await sendMessageWithRetry(chatId, '📭 Активных бесплатных игр Epic Games не найдено.\n\nИспользуйте /epicgames для проверки новых раздач.');
+      return;
+    }
+    
+    let message = `🎁 <b>Активные бесплатные игры Epic Games Store:</b>\n\n`;
+    
+    for (let i = 0; i < activeGames.length && i < 10; i++) {
+      const game = activeGames[i];
+      const endDate = new Date(game.endDate).toLocaleString('ru-RU');
+      message += `${i + 1}. <b>${escapeHtml(game.title)}</b>\n`;
+      message += `   ⏰ До: ${endDate}\n`;
+      message += `   🔗 <a href="${game.url}">Получить</a>\n\n`;
+    }
+    
+    if (activeGames.length > 10) {
+      message += `\n... и ещё ${activeGames.length - 10} игр. Используйте /epicgames для полного списка.`;
+    }
+    
+    await sendMessageWithRetry(chatId, message, {
+      parse_mode: 'HTML',
+      disable_web_page_preview: false
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Неизвестная ошибка';
+    console.error('Ошибка в команде /epiclist:', error);
+    
+    try {
+      await sendMessageWithRetry(chatId, `❌ Ошибка при получении списка игр: ${errorMessage}`);
+    } catch (sendError) {
+      console.error('Не удалось отправить сообщение об ошибке:', sendError);
+    }
+  }
+});
+
 // Обработка ошибок polling
 bot.on('polling_error', (error: any) => {
   const errorMessage = error.message || 'Неизвестная ошибка';
@@ -573,9 +740,16 @@ bot.on('polling_error', (error: any) => {
   // Не падаем, бот должен продолжать работать
 });
 
-// Настройка автоматической проверки
-console.log(`Настройка автоматической проверки с интервалом: ${CHECK_INTERVAL}`);
+// Настройка автоматической проверки freetp.org
+console.log(`Настройка автоматической проверки freetp.org с интервалом: ${CHECK_INTERVAL}`);
 cron.schedule(CHECK_INTERVAL, checkNewGames, {
+  scheduled: true,
+  timezone: 'Europe/Moscow'
+});
+
+// Настройка автоматической проверки Epic Games
+console.log(`Настройка автоматической проверки Epic Games с интервалом: ${EPIC_CHECK_INTERVAL}`);
+cron.schedule(EPIC_CHECK_INTERVAL, checkEpicFreeGames, {
   scheduled: true,
   timezone: 'Europe/Moscow'
 });
@@ -583,6 +757,7 @@ cron.schedule(CHECK_INTERVAL, checkNewGames, {
 // Первоначальная проверка при запуске (опционально)
 // Раскомментируйте, если хотите проверять сразу при старте
 // checkNewGames();
+// checkEpicFreeGames();
 
 // Обработка необработанных исключений
 process.on('uncaughtException', (error: Error) => {
@@ -598,4 +773,5 @@ process.on('unhandledRejection', (reason: any, promise: Promise<any>) => {
 });
 
 console.log('🤖 Бот запущен и готов к работе!');
-console.log(`📡 Проверка новых игр настроена на интервал: ${CHECK_INTERVAL}`);
+console.log(`📡 Проверка новых игр freetp.org настроена на интервал: ${CHECK_INTERVAL}`);
+console.log(`🎁 Проверка бесплатных игр Epic Games настроена на интервал: ${EPIC_CHECK_INTERVAL}`);
