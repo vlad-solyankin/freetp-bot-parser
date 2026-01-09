@@ -1,5 +1,6 @@
-# Используем официальный образ Node.js
-FROM node:18-alpine
+# Используем официальный образ Node.js (версия 20+ для поддержки File API)
+# Используем обычный образ вместо alpine для полной поддержки веб-API
+FROM node:20-slim
 
 # Устанавливаем рабочую директорию
 WORKDIR /app
@@ -26,8 +27,9 @@ RUN npm prune --production && \
 RUN mkdir -p /app/data
 
 # Устанавливаем пользователя (не root для безопасности)
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001 && \
+# В Debian-based образах используем groupadd/useradd вместо addgroup/adduser
+RUN groupadd -r -g 1001 nodejs && \
+    useradd -r -u 1001 -g nodejs nodejs && \
     chown -R nodejs:nodejs /app
 
 USER nodejs

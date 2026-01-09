@@ -314,31 +314,16 @@ async function checkNewGames(): Promise<void> {
   try {
     console.log(`[${checkTime}] Проверка новых игр...`);
     
-    // Отправляем сообщение о начале проверки
-    if (targetChatId) {
-      await sendMessageWithRetry(targetChatId, `🔍 <b>Автоматическая проверка новых игр</b>\n\n⏰ Время: ${checkTime}\n\n⏳ Начинаю парсинг сайта...`, {
-        parse_mode: 'HTML'
-      });
-    }
-    
     const games = await parser.parseGames(10);
     const newGames = storage.findNewGames(games);
 
     if (newGames.length > 0) {
-      console.log(`Найдено новых игр: ${newGames.length}`);
+      console.log(`[${checkTime}] Найдено новых игр: ${newGames.length}`);
       
       // Сохраняем новые игры
       storage.addGames(newGames);
 
-      // Отправляем сообщение о результате проверки
-      if (targetChatId) {
-        const resultMessage = `✅ <b>Проверка завершена!</b>\n\n🆕 Найдено новых игр: <b>${newGames.length}</b>\n⏰ Время: ${checkTime}`;
-        await sendMessageWithRetry(targetChatId, resultMessage, {
-          parse_mode: 'HTML'
-        });
-      }
-
-      // Отправляем уведомления о каждой новой игре
+      // Отправляем уведомления о каждой новой игре (только если найдены новые игры)
       for (const game of newGames) {
         const message = `🆕 <b>Новая игра на freetp.org!</b>\n\n${formatGame(game)}`;
         
@@ -358,26 +343,13 @@ async function checkNewGames(): Promise<void> {
         }
       }
     } else {
-      console.log('Новых игр не найдено');
-      
-      // Отправляем сообщение о том, что новых игр не найдено
-      if (targetChatId) {
-        const resultMessage = `✅ <b>Проверка завершена</b>\n\n📭 Новых игр не найдено\n⏰ Время: ${checkTime}`;
-        await sendMessageWithRetry(targetChatId, resultMessage, {
-          parse_mode: 'HTML'
-        });
-      }
+      // Логируем в консоль, но не отправляем уведомление в бот
+      console.log(`[${checkTime}] Проверка завершена. Новых игр не найдено.`);
     }
   } catch (error) {
-    console.error('Ошибка при проверке новых игр:', error);
-    
-    // Отправляем сообщение об ошибке
-    if (targetChatId) {
-      const errorMessage = error instanceof Error ? error.message : 'Неизвестная ошибка';
-      await sendMessageWithRetry(targetChatId, `❌ <b>Ошибка при проверке новых игр</b>\n\n⏰ Время: ${checkTime}\n\n🔴 ${errorMessage}`, {
-        parse_mode: 'HTML'
-      });
-    }
+    // Логируем ошибку в консоль, но не отправляем уведомление в бот
+    const errorMessage = error instanceof Error ? error.message : 'Неизвестная ошибка';
+    console.error(`[${checkTime}] Ошибка при проверке новых игр:`, errorMessage);
   }
 }
 
